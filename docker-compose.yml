@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: velib_postgres
+    environment:
+      POSTGRES_USER: velib_user
+      POSTGRES_PASSWORD: velib_password
+      POSTGRES_DB: velib_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - data_network
+
+  minio:
+    image: minio/minio
+    container_name: velib_minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./minio_data:/data
+    networks:
+      - data_network
+
+  n8n:
+    image: n8nio/n8n
+    container_name: velib_n8n
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://patrica-expulsive-sniffingly.ngrok-free.dev # Needs ngrok URL in real usage
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    depends_on:
+      - postgres
+    networks:
+      - data_network
+
+  metabase:
+    image: metabase/metabase
+    container_name: velib_metabase
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: velib_db
+      MB_DB_PORT: 5432
+      MB_DB_USER: velib_user
+      MB_DB_PASS: velib_password
+      MB_DB_HOST: postgres
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    networks:
+      - data_network
+
+networks:
+  data_network:
+    driver: bridge
