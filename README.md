@@ -65,7 +65,7 @@ Le bot Telegram (lié via ngrok à un webhook n8n) propose de recevoir :
 
 ### Commandes pour lancer l'infrastructure :
 
-Modifier URL_WBEHOOK dans le service n8n avec l'url NGROK
+Modifier URL_WEBHOOK dans le service n8n avec l'url NGROK
 
 ```bash
 docker-compose up -d
