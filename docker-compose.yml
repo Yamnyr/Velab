@@ -39,7 +39,7 @@ services:
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       - NODE_ENV=production
-      - WEBHOOK_URL=https://patrica-expulsive-sniffingly.ngrok-free.dev # Needs ngrok URL in real usage
+      - WEBHOOK_URL=https://nonpursuant-nondistortedly-helaine.ngrok-free.dev # Needs ngrok URL in real usage
     ports:
       - "5678:5678"
     volumes:

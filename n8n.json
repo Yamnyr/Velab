@@ -1,0 +1,824 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/velib-disponibilite-en-temps-reel/exports/json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -560,
+        16
+      ],
+      "id": "6e8bce93-c495-4784-97ab-54bf9c791c93",
+      "name": "HTTP Request",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -928,
+        704
+      ],
+      "id": "f91b1f1f-3b69-4552-9bb0-b05487bee3ef",
+      "name": "Telegram Trigger",
+      "webhookId": "d07d5191-a396-48d1-a99a-a71c0fcd7f93",
+      "credentials": {
+        "telegramApi": {
+          "id": "zuCRgOPfp3a77zqa",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $items(\"GET vue kpi_critical_stations\").map(item => item.json);\n\nconst fullStations = results.filter(s => s.station_state === 'FULL');\nconst emptyStations = results.filter(s => s.station_state === 'EMPTY');\n\nfunction groupByDistrict(stations) {\n    const grouped = {};\n    stations.forEach(s => {\n        if (!grouped[s.arrondissement]) grouped[s.arrondissement] = [];\n        grouped[s.arrondissement].push(s.station_name);\n    });\n    return grouped;\n}\n\n// Message pour stations pleines\nlet fullMessage = '';\nif (fullStations.length > 0) {\n    fullMessage += '🅿️ Stations pleines (0 place disponible) :\\n';\n    const groupedFull = groupByDistrict(fullStations);\n    for (const [district, names] of Object.entries(groupedFull)) {\n        fullMessage += `• ${district} :\\n`;\n        names.forEach(name => {\n            fullMessage += `    - ${name}\\n`;\n        });\n        fullMessage += '\\n';\n    }\n}\n\n// Message pour stations vides\nlet emptyMessage = '';\nif (emptyStations.length > 0) {\n    emptyMessage += '🚲 Stations vides (0 vélo disponible) :\\n';\n    const groupedEmpty = groupByDistrict(emptyStations);\n    for (const [district, names] of Object.entries(groupedEmpty)) {\n        emptyMessage += `• ${district} :\\n`;\n        names.forEach(name => {\n            emptyMessage += `    - ${name}\\n`;\n        });\n        emptyMessage += '\\n';\n    }\n}\n\n// Limiter chaque message à 4000 caractères\nif (fullMessage.length > 4000) fullMessage = fullMessage.slice(0, 4000) + \"\\n…(message tronqué)\";\nif (emptyMessage.length > 4000) emptyMessage = emptyMessage.slice(0, 4000) + \"\\n…(message tronqué)\";\n\n// Retourner deux messages séparés pour Telegram\nconst output = [];\nif (fullMessage) output.push({ json: { text: fullMessage } });\nif (emptyMessage) output.push({ json: { text: emptyMessage } });\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        240
+      ],
+      "id": "478e05db-a56d-401c-ad65-9a21c9d72b15",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "chatId": "8735583096",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        240
+      ],
+      "id": "79376263-8b57-46bf-b930-cd42476f3da8",
+      "name": "Send a text message",
+      "webhookId": "05bb99cc-b8cf-431e-91b9-d1a71ace82bb",
+      "credentials": {
+        "telegramApi": {
+          "id": "zuCRgOPfp3a77zqa",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO curated.dim_station (\n    station_code,\n    station_name,\n    capacity,\n    latitude,\n    longitude,\n    arrondissement\n)\nSELECT DISTINCT\n    s.stationcode,\n    s.name,\n    s.capacity,\n    (s.coordonnees_geo->>'lat')::FLOAT,\n    (s.coordonnees_geo->>'lon')::FLOAT,\n    s.nom_arrondissement_communes\nFROM staging.velib_stations s\nWHERE s.duedate IS NOT NULL\nON CONFLICT (station_code)\nDO UPDATE SET\n    station_name = EXCLUDED.station_name,\n    capacity = EXCLUDED.capacity,\n    arrondissement = EXCLUDED.arrondissement,\n    latitude = EXCLUDED.latitude,\n    longitude = EXCLUDED.longitude,\n    last_updated = CURRENT_TIMESTAMP;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        64,
+        240
+      ],
+      "id": "ddf1d7cf-28b5-48ae-a02e-fa1ce5e2ede8",
+      "name": "INSERT dim_station",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO curated.fact_station_status (\n    station_code,\n    is_installed,\n    is_renting,\n    is_returning,\n    num_docks_available,\n    num_bikes_available,\n    mechanical_bikes,\n    ebikes,\n    status_timestamp,\n    ingestion_timestamp\n)\nSELECT\n    s.stationcode,\n    s.is_installed = 'OUI',\n    s.is_renting = 'OUI',\n    s.is_returning = 'OUI',\n    COALESCE(s.numdocksavailable,0),\n    COALESCE(s.numbikesavailable,0),\n    COALESCE(s.mechanical,0),\n    COALESCE(s.ebike,0),\n    s.duedate::TIMESTAMP,\n    CURRENT_TIMESTAMP\nFROM staging.velib_stations s\nWHERE s.duedate IS NOT NULL;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        288,
+        240
+      ],
+      "id": "aa1f5288-d3c4-422f-8fb1-785394fa132e",
+      "name": "INSERT fact_station_status",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO staging.velib_stations (\n    stationcode,\n    name,\n    is_installed,\n    capacity,\n    numdocksavailable,\n    numbikesavailable,\n    mechanical,\n    ebike,\n    is_renting,\n    is_returning,\n    duedate,\n    coordonnees_geo,\n    nom_arrondissement_communes\n) VALUES (\n    '{{$json.stationcode}}',\n    '{{$json.name}}',\n    {{$json.is_installed}},\n    {{$json.capacity}},\n    {{$json.numdocksavailable}},\n    {{$json.numbikesavailable}},\n    {{$json.mechanical}},\n    {{$json.ebike}},\n    {{$json.is_renting}},\n    {{$json.is_returning}},\n    {{$json.duedate ? \"TIMESTAMP '\" + $json.duedate + \"'\" : \"NULL\"}},\n    {{$json.coordonnees_geo ? \"'\" + JSON.stringify($json.coordonnees_geo) + \"'::jsonb\" : \"NULL\"}},\n    '{{$json.arrondissement}}'\n);",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -160,
+        240
+      ],
+      "id": "c9fa68b6-3e11-436b-9924-586dcce1d034",
+      "name": "INSERT staging_velib_stations",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "TRUNCATE staging.velib_stations;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -736,
+        16
+      ],
+      "id": "4cf5e8ab-ae6e-4f3a-a92f-2a8122ae88c5",
+      "name": "TRUNCATE staging",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics.vw_kpi_critical_stations",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        240
+      ],
+      "id": "6246b072-f402-4434-95ba-ddd20eea7631",
+      "name": "GET vue kpi_critical_stations",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -912,
+        16
+      ],
+      "id": "1193470c-65a2-4c1d-a671-ab21ee9a30b4",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "raw",
+        "fileName": "=velib_raw_{{$now.format('yyyy-MM-dd_HH-mm-ss')}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        -160
+      ],
+      "id": "14ac1ac4-04ec-4543-8547-3ec0176ce0c6",
+      "name": "Upload in raw bucket",
+      "alwaysOutputData": true,
+      "credentials": {
+        "s3": {
+          "id": "5tjUoEukNkEudxVr",
+          "name": "S3 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "staging",
+        "fileName": "=velib_staging_{{$now.format('yyyy-MM-dd_HH-mm-ss')}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        48,
+        16
+      ],
+      "id": "3a810bee-1ce0-4143-8648-a55750266851",
+      "name": "Upload in staging bucket",
+      "credentials": {
+        "s3": {
+          "id": "5tjUoEukNkEudxVr",
+          "name": "S3 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -368,
+        -160
+      ],
+      "id": "647eb8cf-10b5-452b-8c00-57140b9cbe11",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -160,
+        16
+      ],
+      "id": "9779100f-e3eb-4605-bde8-342f31346fdd",
+      "name": "Convert to File1"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const s = item.json;\n\n  const cleanString = (value) => {\n    if (!value) return null;\n\n    return value\n      .replace(/'/g, \"''\")   // échappe apostrophes SQL\n      .replace(/’/g, \"''\")   // apostrophe typographique\n      .replace(/\\\\/g, \"\\\\\\\\\") // backslash\n      .trim();\n  };\n\n  return {\n    json: {\n      stationcode: s.stationcode,\n      name: cleanString(s.name),\n      is_installed: s.is_installed === 'OUI',\n      capacity: s.capacity || 0,\n      numdocksavailable: s.numdocksavailable || 0,\n      numbikesavailable: s.numbikesavailable || 0,\n      mechanical: s.mechanical || 0,\n      ebike: s.ebike || 0,\n      is_renting: s.is_renting === 'OUI',\n      is_returning: s.is_returning === 'OUI',\n      duedate: s.duedate ? s.duedate.replace('T',' ').replace('+00:00','') : null,\n      coordonnees_geo: s.coordonnees_geo || null,\n      arrondissement: cleanString(s.nom_arrondissement_communes)\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -368,
+        16
+      ],
+      "id": "94855dff-1f06-4709-aeb8-ed862d838b78",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        832,
+        16
+      ],
+      "id": "72908a0c-627b-4b44-b3d2-656b2fe72000",
+      "name": "Convert to File2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    f.*,\n    d.station_name,\n    d.arrondissement\nFROM curated.fact_station_status f\nJOIN curated.dim_station d \n    ON f.station_code = d.station_code\nJOIN (\n    SELECT station_code, MAX(status_timestamp) AS latest_ts\n    FROM curated.fact_station_status\n    GROUP BY station_code\n) latest\n    ON f.station_code = latest.station_code\n   AND f.status_timestamp = latest.latest_ts;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        16
+      ],
+      "id": "49650404-964f-43db-9c52-cbfe9eb1d48a",
+      "name": "GET curated_fact and curated_dim",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "curated",
+        "fileName": "=velib_curated_{{$now.format('yyyy-MM-dd_HH-mm-ss')}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        16
+      ],
+      "id": "4206b47b-0dac-4f6d-9621-15eb80911d02",
+      "name": "Upload in curated bucket",
+      "credentials": {
+        "s3": {
+          "id": "5tjUoEukNkEudxVr",
+          "name": "S3 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json[\"message\"][\"text\"]}}",
+                    "rightValue": "/kpi_global",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    },
+                    "id": "269ff0ed-477d-4e83-ad83-bb286d05efda"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "2a9d324c-3711-4dd2-ae57-b576fe429c9c",
+                    "leftValue": "={{$json[\"message\"][\"text\"]}}",
+                    "rightValue": "/kpi_critical",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "9b5f8589-09f2-4fcd-889e-58015cfa7857",
+                    "leftValue": "={{$json[\"message\"][\"text\"]}}",
+                    "rightValue": "/fill_rate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -736,
+        688
+      ],
+      "id": "3be74bb0-d79b-4f07-b01d-332d0fa396f4",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics.vw_kpi_global_availability;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -512,
+        528
+      ],
+      "id": "c891bdfc-c014-4c9e-b3cf-9b016aa96ce1",
+      "name": "GET vw_kpi_global_availability",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics.vw_kpi_critical_stations\nORDER BY status_timestamp DESC\nLIMIT 10;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -512,
+        704
+      ],
+      "id": "76081477-1421-48b1-93ee-a54aae56b78b",
+      "name": "GET vw_kpi_critical_stations",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM analytics.vw_fill_rate_by_district\nORDER BY avg_fill_rate_pct DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -512,
+        896
+      ],
+      "id": "d07e39d1-9fa6-4676-b08b-2b9284c31d0d",
+      "name": "GET vw_fill_rate_by_district",
+      "credentials": {
+        "postgres": {
+          "id": "ii45yuvMpIab5YNr",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const kpi = items[0].json;\nreturn [{\n  json: {\n    text: `📊 KPI Global Vélib\nTotal vélos : ${kpi.total_bikes}\n- Mécaniques : ${kpi.total_mechanical}\n- Électriques : ${kpi.total_ebikes}\nPlaces vides : ${kpi.total_empty_docks}\nDernière mise à jour : ${kpi.last_update}`\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        528
+      ],
+      "id": "74b05b5f-ec37-4d1d-a44b-b6153b1bf5ff",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "let msg = \"⚠️ Top 10 Stations critiques :\\n\";\nitems.forEach(s => {\n  msg += `${s.json.station_name} (${s.json.arrondissement}) - Bikes: ${s.json.num_bikes_available}, Docks: ${s.json.num_docks_available}\\n`;\n});\nreturn [{ json: { text: msg } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        704
+      ],
+      "id": "80cc6714-50c1-44bb-8712-7553bc5bb652",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "jsCode": "let msg = \"📈 Taux de remplissage par arrondissement :\\n\";\nitems.forEach(s => {\n  msg += `${s.json.arrondissement}: ${parseFloat(s.json.avg_fill_rate_pct).toFixed(1)}% (${s.json.total_stations} stations)\\n`;\n});\nreturn [{ json: { text: msg } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        896
+      ],
+      "id": "3b9e22fb-d94e-483c-b51e-ba7505a6f99b",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -64,
+        704
+      ],
+      "id": "03b3088a-fde5-4cb9-ba48-4209303bb7a6",
+      "name": "Send a text message1",
+      "webhookId": "7d927a93-68b6-44ee-a317-e0c96e2fdd61",
+      "credentials": {
+        "telegramApi": {
+          "id": "zuCRgOPfp3a77zqa",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT dim_station": {
+      "main": [
+        [
+          {
+            "node": "INSERT fact_station_status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT fact_station_status": {
+      "main": [
+        [
+          {
+            "node": "GET vue kpi_critical_stations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET curated_fact and curated_dim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "INSERT staging_velib_stations": {
+      "main": [
+        [
+          {
+            "node": "INSERT dim_station",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRUNCATE staging": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET vue kpi_critical_stations": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "TRUNCATE staging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Upload in raw bucket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File1": {
+      "main": [
+        [
+          {
+            "node": "Upload in staging bucket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "INSERT staging_velib_stations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert to File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File2": {
+      "main": [
+        [
+          {
+            "node": "Upload in curated bucket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET curated_fact and curated_dim": {
+      "main": [
+        [
+          {
+            "node": "Convert to File2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "GET vw_kpi_global_availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GET vw_kpi_critical_stations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GET vw_fill_rate_by_district",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET vw_kpi_global_availability": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET vw_kpi_critical_stations": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET vw_fill_rate_by_district": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8884fa61e19613a6364919e8a2f432bd2027558667a0eb766cbaf58e5ea89367"
+  }
+}
